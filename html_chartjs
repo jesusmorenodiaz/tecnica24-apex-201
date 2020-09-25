@@ -1,0 +1,160 @@
+CREATE OR REPLACE FUNCTION HTML_CHARTJS
+(
+  P_TYPE IN VARCHAR2 
+, P_TITLE IN VARCHAR2
+, P_DATA IN VARCHAR2 
+, P_WIDTH IN NUMBER DEFAULT 400
+, P_HEIGHT IN NUMBER DEFAULT 400
+, P_BORDER IN NUMBER DEFAULT 1
+, P_FILL IN NUMBER DEFAULT 1
+, P_OPTIONS IN VARCHAR2 DEFAULT NULL
+, P_ID IN VARCHAR2 DEFAULT NULL
+) RETURN VARCHAR2 AS 
+   V_HTML VARCHAR2(32000);
+   V_TEMPLATE VARCHAR2(32000);
+   V_LABELS VARCHAR2(32000);
+   V_DATA VARCHAR2(32000);
+   V_COLORS VARCHAR2(32000);
+   V_BGCOLORS VARCHAR2(32000);
+   V_COLOR VARCHAR2(2000);
+   V_ITEMS NUMBER;
+   V_OPTIONS VARCHAR2(32000);
+   
+   -- RETURN NUM ITEM OF STRING BY SEPARATOR
+   FUNCTION THIS_GET_ITEM_NUM
+   (
+     P_STRING IN VARCHAR2 
+   , P_ITEM IN NUMBER 
+   , P_SEPARATOR IN VARCHAR2 DEFAULT ','
+   ) RETURN VARCHAR2 AS 
+      V_RETURN VARCHAR2(4000);
+      V_ITEM NUMBER(12,0);
+      V_POS NUMBER(12,0);
+      V_STRING VARCHAR2(4000);
+   BEGIN
+      V_STRING := P_STRING || P_SEPARATOR;
+      V_ITEM := 0;
+      LOOP
+         V_ITEM := V_ITEM + 1;
+         V_POS := INSTR( V_STRING, P_SEPARATOR );
+         V_RETURN := SUBSTR( V_STRING, 1, V_POS - 1 );
+         V_STRING := SUBSTR( V_STRING, V_POS + 1 );
+      EXIT WHEN V_ITEM = P_ITEM OR V_ITEM > 100;
+      END LOOP;
+   
+      RETURN V_RETURN;
+   
+   END THIS_GET_ITEM_NUM;
+
+   -- NUMBER OF ITEMS BY SEPARATOR
+   FUNCTION THIS_NUM_ITEMS 
+   (
+     P_STRING IN VARCHAR2  
+   , P_SEPARATOR IN VARCHAR2  
+   ) RETURN NUMBER AS
+      V_STRING VARCHAR2(4000);
+      V_POS NUMBER(12,0);
+      V_DATA VARCHAR2(4000);
+      V_ITEM NUMBER(12,0);
+   BEGIN
+   
+      IF P_STRING IS NULL OR LENGTH( P_STRING ) = 0 THEN
+         RETURN 0;
+      END IF;
+      V_ITEM := 0;
+      V_STRING := P_STRING||P_SEPARATOR;
+      V_POS := INSTR( V_STRING, P_SEPARATOR );
+      WHILE V_POS > 0
+      LOOP
+         V_STRING := SUBSTR( V_STRING, V_POS + 1 );
+         V_POS := INSTR( V_STRING, P_SEPARATOR );
+         V_ITEM := V_ITEM + 1;
+      END LOOP;
+   
+      RETURN V_ITEM;
+      
+   END THIS_NUM_ITEMS;
+
+BEGIN
+
+   -- P_DATA IN FORMAT: elementos separados por comas, cada uno con 4 valores separados por dos puntos, L1:D1:C1:BG1,L2:D2:C2:BG2,...(L=label,D=data,C=color,BG=background color)
+  
+   -- OPTIONS
+   IF P_OPTIONS IS NOT NULL THEN
+      V_OPTIONS := P_OPTIONS;
+   ELSE
+      V_OPTIONS := q'[
+       options: {
+           scales: {
+               yAxes: [{
+                   ticks: {
+                       beginAtZero: true
+                   }
+               }]
+           }
+       }
+      ]';
+   END IF;
+   
+   -- TEMPLATE HTML
+   V_TEMPLATE := q'[
+   <script src="https://cdn.jsdelivr.net/npm/chart.js@2.8.0"></script>
+   <div style="max-width: $WIDTH$px; max-height: $HEIGHT$px;">
+   <canvas id="$ID$" width="$WIDTH$" height="$HEIGHT$"></canvas>
+   </div>
+   <script>
+   var ctx = document.getElementById('$ID$').getContext('2d');
+   var myChart = new Chart(ctx, {
+       type: '$TYPE$',
+       data: {
+           labels: [ $LABELS$ ],
+           datasets: [{
+               label: '$TITLE$',
+               data: [ $DATA$ ],
+               backgroundColor: [ $COLORS$ ],
+               borderColor: [ $BGCOLORS$ ],
+               borderWidth: $BORDERWIDTH$,
+               fill: $FILL$
+           }]
+       },
+       $OPTIONS$
+   });
+   </script>
+   ]';
+   
+   -- ELEMENTS
+   V_LABELS := '';
+   V_DATA := '';
+   V_COLORS := '';
+   V_BGCOLORS := '';
+   FOR V_ITEM IN 1..THIS_NUM_ITEMS( P_DATA, ',' )
+   LOOP
+      V_COLOR := q'['rgba( $1$, $2$, $3$, $4$ )']';
+      V_COLOR := REPLACE( V_COLOR, '$1$', ROUND( DBMS_RANDOM.VALUE(0,254), 0 ) );
+      V_COLOR := REPLACE( V_COLOR, '$2$', ROUND( DBMS_RANDOM.VALUE(0,254), 0 ) );
+      V_COLOR := REPLACE( V_COLOR, '$3$', ROUND( DBMS_RANDOM.VALUE(0,254), 0 ) );
+      V_LABELS := V_LABELS || CASE WHEN V_LABELS IS NOT NULL THEN ',' ELSE '' END || q'[']' || THIS_GET_ITEM_NUM( THIS_GET_ITEM_NUM( P_DATA, V_ITEM, ',' ), 1, ':' ) || q'[']';
+      V_DATA := V_DATA  || CASE WHEN V_DATA IS NOT NULL THEN ',' ELSE '' END || THIS_GET_ITEM_NUM( THIS_GET_ITEM_NUM( P_DATA, V_ITEM, ',' ), 2, ':' );
+      V_COLORS := V_COLORS  || CASE WHEN V_COLORS IS NOT NULL THEN ',' ELSE '' END || NVL( THIS_GET_ITEM_NUM( THIS_GET_ITEM_NUM( P_DATA, V_ITEM, ',' ), 3, ':' ), REPLACE( V_COLOR, '$4$', '1' ) );
+      V_BGCOLORS := V_BGCOLORS  || CASE WHEN V_BGCOLORS IS NOT NULL THEN ',' ELSE '' END || NVL( THIS_GET_ITEM_NUM( THIS_GET_ITEM_NUM( P_DATA, V_ITEM, ',' ), 4, ':' ), REPLACE( V_COLOR, '$4$', '0.2' ) );
+   END LOOP;
+   
+   -- REPLACES
+   V_HTML := V_TEMPLATE;
+   V_HTML := REPLACE( V_HTML, '$ID$', NVL( P_ID, 'CHART_' || DBMS_RANDOM.STRING( 'A', 5 ) ) );
+   V_HTML := REPLACE( V_HTML, '$WIDTH$', P_WIDTH );
+   V_HTML := REPLACE( V_HTML, '$HEIGHT$', P_HEIGHT );
+   V_HTML := REPLACE( V_HTML, '$TYPE$', LOWER(P_TYPE) );
+   V_HTML := REPLACE( V_HTML, '$TITLE$', P_TITLE );
+   V_HTML := REPLACE( V_HTML, '$BORDERWIDTH$', P_BORDER );
+   V_HTML := REPLACE( V_HTML, '$LABELS$', V_LABELS );
+   V_HTML := REPLACE( V_HTML, '$DATA$', V_DATA );
+   V_HTML := REPLACE( V_HTML, '$COLORS$', V_COLORS );
+   V_HTML := REPLACE( V_HTML, '$BGCOLORS$', V_BGCOLORS );
+   V_HTML := REPLACE( V_HTML, '$OPTIONS$', V_OPTIONS );
+   V_HTML := REPLACE( V_HTML, '$FILL$', CASE WHEN P_FILL = 1 THEN 'true' ELSE 'false' END );
+   
+   -- RETURN HTML
+   RETURN V_HTML;
+  
+END;
