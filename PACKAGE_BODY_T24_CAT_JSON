@@ -1,0 +1,260 @@
+create or replace PACKAGE BODY T24_CAT_JSON AS
+ 
+   -- TECNICA24
+   -- http://www.tecnica24.es
+   -- JESUS MORENO DIAZ
+   -- @jesusmoreno
+   
+   -- SETS ALL GLOBAL DATA
+   PROCEDURE INITIALIZE AS
+   BEGIN    
+     G_INDEX := T_INDEX();
+     G_DATA := T_DATA();
+     G_SOURCE := T_DATA();
+   END INITIALIZE;
+
+   -- ADD JSON RESULT FROM SQL   
+   PROCEDURE ADD( P_INDEX IN VARCHAR2, P_SQL IN CLOB ) AS
+   BEGIN
+     G_INDEX.EXTEND;
+     G_INDEX(G_INDEX.COUNT) := P_INDEX;
+     G_SOURCE(P_INDEX) := P_SQL;
+     G_DATA(P_INDEX) := SQL_JSON( P_SQL );    
+   END ADD;
+
+   -- DISPLAY ALL ITEMS
+   PROCEDURE DISPLAY( P_CODE IN VARCHAR2 DEFAULT NULL ) AS
+   BEGIN
+      DBMS_OUTPUT.ENABLE(2000000);
+      FOR I IN 1..G_DATA.COUNT
+      LOOP
+         IF UPPER(G_INDEX(I)) = UPPER(P_CODE) OR P_CODE IS NULL THEN
+            IF P_CODE IS NOT NULL THEN
+               DBMS_OUTPUT.PUT_LINE( 'CODE='||P_CODE );
+            END IF;
+            DBMS_OUTPUT.PUT_LINE( 'SOURCE='||G_SOURCE(G_INDEX(I)) );
+            DBMS_OUTPUT.PUT_LINE( 'DATA='||G_DATA(G_INDEX(I)) );
+            DBMS_OUTPUT.PUT_LINE( '-' );
+         END IF;
+      END LOOP;
+   END DISPLAY;
+   
+   -- CHANGE MARKDOWN ITEMS WITH VALUES   
+   FUNCTION PARSE( P_MARKDOWN IN CLOB, P_DEBUG IN NUMBER DEFAULT 0 ) RETURN CLOB AS
+      V_CODE VARCHAR2(200);
+      V_SQL VARCHAR2(4000);
+      V_PATH VARCHAR2(4000);
+      V_LINE NUMBER;
+      V_RESULT NUMBER;
+      V_DEBUG NUMBER;
+      V_CLOB CLOB;
+      V_VALUE VARCHAR2(4000);
+      V_DATA VARCHAR2(4000);
+      V_STRING VARCHAR2(4000);
+      V_POS1 NUMBER;
+      V_POS2 NUMBER;
+      V_ITEM VARCHAR2(2000);
+   BEGIN
+   
+      -- INITIALIZE
+      INITIALIZE;
+      
+      -- ITEMS
+      V_LINE := 0;
+      V_RESULT := 0;
+      V_DEBUG := P_DEBUG;
+      V_CLOB := '';
+      FOR C_DAT IN ( SELECT COLUMN_VALUE FROM TABLE( APEX_STRING.SPLIT( P_MARKDOWN, CHR(10) ) ) ) 
+      LOOP
+         -- LINE
+         V_DATA := C_DAT.COLUMN_VALUE;
+         -- DEBUG
+         IF V_DATA LIKE '%DEBUG%' THEN
+            V_DEBUG := 1;
+         -- SQL
+         ELSIF V_DATA LIKE '%{%:%}%' THEN
+            V_LINE := V_LINE + 1;
+            V_POS1 := INSTR( V_DATA, '{' );
+            V_POS2 := INSTR( V_DATA, '}' );
+            V_ITEM := SUBSTR( V_DATA, V_POS1 + 1, V_POS2 - V_POS1 - 1 );
+            V_CODE := TRIM( REPLACE( GET_ITEM_NUM( V_ITEM, 1, ':' ), '{', '' ) );
+            V_SQL := TRIM( REPLACE( GET_ITEM_NUM( V_ITEM, 2, ':' ), '}', '' ) );
+            IF V_DEBUG = 1 THEN
+               DBMS_OUTPUT.PUT_LINE( 'LINE='||V_LINE );
+               DBMS_OUTPUT.PUT_LINE( 'CODE='||V_CODE );
+               DBMS_OUTPUT.PUT_LINE( 'SQL='||V_SQL );
+               DBMS_OUTPUT.PUT_LINE( '-' );
+            END IF;
+            ADD( V_CODE, V_SQL );
+         -- DATA
+         ELSIF V_DATA LIKE '%{%.%}%' THEN
+            -- PROCESS ALL TAGS IN SAME LINE
+            V_STRING := V_DATA;
+            WHILE TRUE
+            LOOP
+               V_RESULT := V_RESULT + 1;
+               V_POS1 := INSTR( V_DATA, '{' );
+               IF V_POS1 = 0 THEN
+                  EXIT;
+               END IF;
+               V_POS2 := INSTR( V_DATA, '}' );
+               V_ITEM := SUBSTR( V_DATA, V_POS1 + 1, V_POS2 - V_POS1 - 1 );
+               V_CODE := TRIM( REPLACE( GET_ITEM_NUM( V_ITEM, 1, '.' ), '{', '' ) );
+               V_PATH := TRIM( REPLACE( GET_ITEM_NUM( V_ITEM, 2, '.' ), '}', '' ) );
+               V_VALUE := GET_VALUE( V_CODE, CASE WHEN V_PATH LIKE '$%' THEN V_PATH ELSE '$.'||V_PATH END );
+               IF V_DEBUG = 1 THEN
+                  DBMS_OUTPUT.PUT_LINE( 'CODE='||V_CODE||', VALUE='||V_VALUE );
+               ELSE
+                  V_STRING := REPLACE( V_STRING, '{'||V_ITEM||'}', V_VALUE );
+               END IF;
+               V_DATA := SUBSTR( V_DATA, V_POS2 + 1 );
+            END LOOP;
+            V_CLOB := V_CLOB || V_STRING;
+         ELSE
+            V_CLOB := V_CLOB || C_DAT.COLUMN_VALUE;
+         END IF;
+      END LOOP;
+      RETURN V_CLOB;
+   EXCEPTION
+      WHEN OTHERS THEN
+         RETURN 'LINE='||V_LINE||', DATA='||V_DATA||', ERROR='||SQLERRM;
+   END;
+
+   -- GET JSON FROM SQL  
+   FUNCTION SQL_JSON(  P_SQL IN VARCHAR2 
+                     , P_OPTIONS IN VARCHAR2 DEFAULT 'NONE'
+                     , P_START IN VARCHAR2 DEFAULT '['
+                     , P_ROW IN VARCHAR2 DEFAULT '{$CONTENT$}'
+                     , P_HEAD IN VARCHAR2 DEFAULT ''
+                     , P_COL IN VARCHAR2 DEFAULT '"$NAME$": "$CONTENT$"'
+                     , P_END IN VARCHAR2 DEFAULT ']'
+                     , P_SKIP IN VARCHAR2 DEFAULT ','
+                     , P_COLS IN NUMBER DEFAULT 1
+   ) RETURN CLOB AS 
+      V_HTML CLOB;
+      V_NUMBER NUMBER;
+      V_VARCHAR2 VARCHAR2(2000);
+      V_COLS NUMBER;
+      V_TABCOLUMNS DBMS_SQL.DESC_TAB;
+      V_CURSOR NUMBER;
+      V_RETURN CLOB;
+      V_ROW CLOB;
+      V_ROWS CLOB;
+      V_EXEC NUMBER;
+      V_RESULT CLOB;
+      V_FIRST NUMBER;
+      V_VALUE VARCHAR2(2000);
+      V_AUX VARCHAR(32000);
+   BEGIN
+   
+      V_RETURN := '';
+      V_CURSOR := DBMS_SQL.OPEN_CURSOR;
+      DBMS_SQL.PARSE(V_CURSOR, P_SQL, DBMS_SQL.NATIVE);
+      DBMS_SQL.DESCRIBE_COLUMNS(V_CURSOR,V_COLS,V_TABCOLUMNS);
+      FOR I IN 1..V_COLS
+      LOOP
+         IF V_TABCOLUMNS(I).COL_TYPE = DBMS_TYPES.TYPECODE_NUMBER THEN
+            DBMS_SQL.DEFINE_COLUMN(V_CURSOR,I,V_NUMBER);
+         END IF;
+         IF V_TABCOLUMNS(I).COL_TYPE = DBMS_TYPES.TYPECODE_VARCHAR2  THEN
+            DBMS_SQL.DEFINE_COLUMN(V_CURSOR,I,V_VARCHAR2, 2000);
+         END IF;      
+         IF V_TABCOLUMNS(I).COL_TYPE = DBMS_TYPES.TYPECODE_VARCHAR  THEN
+            DBMS_SQL.DEFINE_COLUMN(V_CURSOR,I,V_VARCHAR2, 2000);
+         END IF; 
+      END LOOP;
+   
+      -- ROWS
+      V_FIRST := 1;
+      V_ROWS := '';
+      V_EXEC := DBMS_SQL.EXECUTE(V_CURSOR);
+      WHILE DBMS_SQL.FETCH_ROWS(V_CURSOR)>0
+      LOOP
+         V_ROW := '';
+         V_HTML := '';
+         FOR I IN 1..V_COLS
+         LOOP
+            -- NUMBER
+            IF V_TABCOLUMNS(I).COL_TYPE = DBMS_TYPES.TYPECODE_NUMBER THEN
+               DBMS_SQL.COLUMN_VALUE(V_CURSOR,I,V_NUMBER);
+               V_VALUE := TO_CHAR(V_NUMBER);
+            -- VARCHAR2
+            ELSIF V_TABCOLUMNS(I).COL_TYPE = DBMS_TYPES.TYPECODE_VARCHAR2 THEN
+               DBMS_SQL.COLUMN_VALUE(V_CURSOR,I,V_VARCHAR2);
+               V_VALUE := V_VARCHAR2;
+            -- VARCHAR
+            ELSIF V_TABCOLUMNS(I).COL_TYPE = DBMS_TYPES.TYPECODE_VARCHAR THEN
+               DBMS_SQL.COLUMN_VALUE(V_CURSOR,I,V_VARCHAR2);
+               V_VALUE := V_VARCHAR2;
+            END IF;
+   
+            -- ADD COL TO ROW   
+            V_AUX := P_COL;
+            V_AUX := REPLACE( REPLACE( V_AUX, '$CONTENT$', V_VALUE ), '$NAME$', V_TABCOLUMNS(I).COL_NAME);
+            V_ROW := V_ROW || CASE WHEN V_ROW IS NOT NULL THEN ',' ELSE '' END || V_AUX;
+            -- FORMAT ROW
+            V_HTML := V_HTML || REPLACE( P_ROW, '$CONTENT$', V_ROW );
+   
+         END LOOP;
+   
+         V_ROWS := V_ROWS || REPLACE( P_ROW, '$CONTENT$', V_ROW );
+   
+      END LOOP;
+      DBMS_SQL.CLOSE_CURSOR(V_CURSOR);
+   
+      -- RESULT
+      V_RESULT := P_START || V_ROWS || P_END;
+   
+      RETURN V_RESULT;
+   
+   END SQL_JSON;
+
+   -- GET VALUE FROM JSON USING NOTATION {CODE.ITEM} 
+   FUNCTION GET_VALUE( P_CODE IN VARCHAR2, P_PATH IN VARCHAR2, P_DEBUG IN NUMBER DEFAULT 0 ) RETURN VARCHAR2 AS
+      V_SQL CLOB;
+      V_RESULT VARCHAR2(4000);
+   BEGIN
+   
+      V_SQL := q'[SELECT JSON_VALUE( '$JSON$', '$PATH$' ) FROM DUAL]';
+      V_SQL := REPLACE( V_SQL, '$JSON$', G_DATA(P_CODE) );
+      V_SQL := REPLACE( V_SQL, '$PATH$', P_PATH );
+      IF P_DEBUG = 1 THEN
+         DBMS_OUTPUT.PUT_LINE( 'CODE='||P_CODE );
+         DBMS_OUTPUT.PUT_LINE( 'PATH='||P_PATH );
+         DBMS_OUTPUT.PUT_LINE( 'SQL='||V_SQL );
+      END IF;
+      EXECUTE IMMEDIATE V_SQL INTO V_RESULT;
+      IF P_DEBUG = 1 THEN
+         DBMS_OUTPUT.PUT_LINE( 'RESULT='||V_RESULT );
+         DBMS_OUTPUT.PUT_LINE( '-' );
+      END IF;
+
+      RETURN V_RESULT;
+      
+   END;
+
+   -- GET ITEM NUMBER FROM STRING USING SEPARATOR 
+   FUNCTION GET_ITEM_NUM( P_STRING IN VARCHAR2 
+                        , P_ITEM IN NUMBER 
+                        , P_SEPARATOR IN VARCHAR2 DEFAULT ','
+                        ) RETURN VARCHAR2 AS 
+      V_RETURN VARCHAR2(4000);
+      V_ITEM NUMBER(12,0);
+      V_POS NUMBER(12,0);
+      V_STRING VARCHAR2(4000);
+   BEGIN
+      V_STRING := P_STRING || P_SEPARATOR;
+      V_ITEM := 0;
+      LOOP
+         V_ITEM := V_ITEM + 1;
+         V_POS := INSTR( V_STRING, P_SEPARATOR );
+         V_RETURN := SUBSTR( V_STRING, 1, V_POS - 1 );
+         V_STRING := SUBSTR( V_STRING, V_POS + 1 );
+      EXIT WHEN V_ITEM = P_ITEM OR V_ITEM > 100;
+      END LOOP;
+   
+      RETURN V_RETURN;
+   
+   END GET_ITEM_NUM;
+   
+END T24_CAT_JSON;
