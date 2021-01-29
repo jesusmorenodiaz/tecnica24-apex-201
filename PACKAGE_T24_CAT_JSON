@@ -1,5 +1,11 @@
 create or replace PACKAGE T24_CAT_JSON AS 
-
+  
+  -- TECNICA24
+  -- http://www.tecnica24.es
+  -- JESUS MORENO DIAZ
+  -- @jesusmoreno
+  -- Version 1.0 29/01/2021 21:50
+  
   TYPE T_DATA IS TABLE OF CLOB INDEX BY VARCHAR2(200);
   TYPE T_INDEX IS TABLE OF VARCHAR2(200);
   G_INDEX T_INDEX;
