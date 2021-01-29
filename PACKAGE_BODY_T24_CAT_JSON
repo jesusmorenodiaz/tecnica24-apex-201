@@ -1,9 +1,10 @@
 create or replace PACKAGE BODY T24_CAT_JSON AS
  
-   -- TECNICA24
-   -- http://www.tecnica24.es
-   -- JESUS MORENO DIAZ
-   -- @jesusmoreno
+  -- TECNICA24
+  -- http://www.tecnica24.es
+  -- JESUS MORENO DIAZ
+  -- @jesusmoreno
+  -- Version 1.0 29/01/2021 21:50
    
    -- SETS ALL GLOBAL DATA
    PROCEDURE INITIALIZE AS
